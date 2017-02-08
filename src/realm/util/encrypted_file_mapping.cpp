@@ -505,7 +505,9 @@ void EncryptedFileMapping::set(void* new_addr, size_t new_size, size_t new_file_
     m_addr = new_addr;
     m_file_offset = new_file_offset;
 
-    m_first_page = (reinterpret_cast<uintptr_t>(m_addr) - m_file_offset) >> m_page_shift;
+    uintptr_t cast_addr = reinterpret_cast<uintptr_t>(m_addr);
+    REALM_ASSERT_EX(cast_addr >= m_file_offset, cast_addr, m_file_offset);
+    m_first_page = (cast_addr - m_file_offset) >> m_page_shift;
     m_page_count = (new_size + m_file_offset) >> m_page_shift;
 
     m_up_to_date_pages.clear();
