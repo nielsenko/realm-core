@@ -13058,4 +13058,131 @@ TEST(LangBindHelper_MixedTimestampTransaction)
 }
 
 
+namespace {
+
+REALM_FORCEINLINE void rand_sleep(Random& random)
+{
+    const int64_t ms = 500000;
+    unsigned char r = static_cast<unsigned char>(random.draw_int<unsigned int>());
+
+    if (r <= 244)
+        return;
+    else if (r <= 248) {
+        // Busyloop for 0 - 1 ms (on a 2 ghz), probably resume in current time slice
+        int64_t t = random.draw_int_mod(ms);
+        for (volatile int64_t i = 0; i < t; i++) {
+        }
+    }
+    else if (r <= 250) {
+        // Busyloop for 0 - 20 ms (on a 2 ghz), maybe resume in different time slice
+        int64_t t = ms * random.draw_int_mod(20);
+        for (volatile int64_t i = 0; i < t; i++) {
+        }
+    }
+    else if (r <= 252) {
+        // Release current time slice but get next available
+        sched_yield();
+    }
+    else if (r <= 254) {
+        // Release current time slice and get time slice according to normal scheduling
+#ifdef _MSC_VER
+        Sleep(0);
+#else
+        usleep(0);
+#endif
+    }
+    else {
+        // Release time slices for at least 200 ms
+#ifdef _MSC_VER
+        Sleep(200);
+#else
+        usleep(200);
+#endif
+    }
+}
+
+void do_io_on_group(std::string path, size_t id, size_t num_rows) {
+    const size_t num_iterations = 50000; // this makes it run for a loooong time
+    const size_t payload_length_small = 10;
+    const size_t payload_length_large = 10000; // > 4096 == page_size
+    Random random(random_int<unsigned long>()); // Seed from slow global generator
+    const char* key = crypt_key(true);
+    for (size_t rep = 0; rep < num_iterations; ++rep) {
+        SharedGroup sg(path, false, SharedGroupOptions(key));
+
+        const size_t payload_length = rep % 10 == 0 ? payload_length_large : payload_length_small;
+        const char payload_char = 'a' + static_cast<char>((id + rep) % 26);
+        std::string std_payload(payload_length, payload_char);
+        StringData payload(std_payload);
+        if (rep % 3 == 0)
+            payload = StringData(); // null
+        for (size_t i = 0; i < num_rows; ++i) {
+            {
+                WriteTransaction wt(sg);
+                Group& group = wt.get_group();
+                TableRef t = group.get_table(0);
+                t->set_string(id, i, payload);
+                rand_sleep(random);
+                wt.commit();
+            }
+            rand_sleep(random);
+            {
+                ReadTransaction rt(sg);
+                const Group& group = rt.get_group();
+                ConstTableRef t = group.get_table(0);
+                rand_sleep(random);
+                StringData s = t->get_string(id, i);
+                if (rep % 3 == 0) {
+                    REALM_ASSERT(s.is_null());
+                } else {
+                    const char* str_data = s.data();
+                    REALM_ASSERT(s.size() == payload_length);
+                    for (size_t n = 0; n < payload_length; ++n) {
+                        REALM_ASSERT(str_data[n] == payload_char);
+                    }
+                    rand_sleep(random);
+                }
+                REALM_ASSERT(s == payload);
+                //std::cout << "id: " << id << " verified row: " << i << std::endl;
+            }
+        }
+    }
+}
+
+} // end anonymous namespace
+
+
+ONLY(Thread_AsynchronousIODataConsistency)
+{
+    SHARED_GROUP_TEST_PATH(path);
+    const int num_threads = 8;
+    const int num_rows = 200; //2 + REALM_MAX_BPNODE_SIZE;
+    const char* key = crypt_key(true);
+    std::cout << "using encryption key: " << key << std::endl;
+    //ShortCircuitHistory hist(path);
+    SharedGroup sg(path, false, SharedGroupOptions(key));
+
+    {
+        WriteTransaction wt(sg);
+        Group& group = wt.get_group();
+        TableRef t = group.add_table("table");
+        // add a column for each thread to write to
+        for (int i = 0; i < num_threads; ++i) {
+            std::stringstream ss;
+            ss << "string_col" << i;
+            t->add_column(type_String, ss.str().c_str(), true);
+        }
+        t->add_empty_row(num_rows);
+        wt.commit();
+    }
+
+    Thread io_threads[num_threads];
+    for (int i = 0; i < num_threads; ++i) {
+        io_threads[i].start(std::bind(do_io_on_group, std::string(path), i, num_rows));
+    }
+    for (int i = 0; i < num_threads; ++i) {
+        io_threads[i].join();
+    }
+}
+
 #endif
