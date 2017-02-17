@@ -13108,7 +13108,8 @@ void do_io_on_group(std::string path, size_t id, size_t num_rows) {
     Random random(random_int<unsigned long>()); // Seed from slow global generator
     const char* key = crypt_key(true);
     for (size_t rep = 0; rep < num_iterations; ++rep) {
-        SharedGroup sg(path, false, SharedGroupOptions(key));
+        std::unique_ptr<Replication> hist(make_in_realm_history(path));
+        SharedGroup sg(*hist, SharedGroupOptions(key));
 
         const size_t payload_length = rep % 10 == 0 ? payload_length_large : payload_length_small;
         const char payload_char = 'a' + static_cast<char>((id + rep) % 26);
@@ -13117,33 +13118,30 @@ void do_io_on_group(std::string path, size_t id, size_t num_rows) {
         if (rep % 3 == 0)
             payload = StringData(); // null
         for (size_t i = 0; i < num_rows; ++i) {
+            ReadTransaction rt(sg);
             {
-                WriteTransaction wt(sg);
-                Group& group = wt.get_group();
+                LangBindHelper::promote_to_write(sg);
+
+                Group& group = const_cast<Group&>(rt.get_group());
                 TableRef t = group.get_table(0);
                 t->set_string(id, i, payload);
-                rand_sleep(random);
-                wt.commit();
+
+                LangBindHelper::commit_and_continue_as_read(sg);
             }
-            rand_sleep(random);
             {
-                ReadTransaction rt(sg);
-                const Group& group = rt.get_group();
+                Group& group = const_cast<Group&>(rt.get_group());
                 ConstTableRef t = group.get_table(0);
-                rand_sleep(random);
                 StringData s = t->get_string(id, i);
                 if (rep % 3 == 0) {
-                    REALM_ASSERT(s.is_null());
+                    REALM_ASSERT_EX(s.is_null(), i, rep);
                 } else {
                     const char* str_data = s.data();
-                    REALM_ASSERT(s.size() == payload_length);
+                    REALM_ASSERT_EX(s.size() == payload_length, s.size(), payload_length);
                     for (size_t n = 0; n < payload_length; ++n) {
-                        REALM_ASSERT(str_data[n] == payload_char);
+                        REALM_ASSERT_EX(str_data[n] == payload_char, i, rep, n, str_data[n], payload_char);
                     }
-                    rand_sleep(random);
                 }
-                REALM_ASSERT(s == payload);
-                //std::cout << "id: " << id << " verified row: " << i << std::endl;
+                REALM_ASSERT_EX(s == payload, i, rep, s.size(), payload.size());
             }
         }
     }
@@ -13160,7 +13158,8 @@ ONLY(Thread_AsynchronousIODataConsistency)
     const char* key = crypt_key(true);
     std::cout << "using encryption key: " << key << std::endl;
     //ShortCircuitHistory hist(path);
-    SharedGroup sg(path, false, SharedGroupOptions(key));
+    std::unique_ptr<Replication> hist(make_in_realm_history(path));
+    SharedGroup sg(*hist, SharedGroupOptions(key));
 
     {
         WriteTransaction wt(sg);
