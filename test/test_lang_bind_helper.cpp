@@ -13060,89 +13060,69 @@ TEST(LangBindHelper_MixedTimestampTransaction)
 
 namespace {
 
-REALM_FORCEINLINE void rand_sleep(Random& random)
-{
-    const int64_t ms = 500000;
-    unsigned char r = static_cast<unsigned char>(random.draw_int<unsigned int>());
+const char test_key [] = { -28, -13, -114, 48, 62, 27, 14, 126, -114, -38, -125, 83, 41, -52, -34, 116, -114, -99, 96, -71, 51, -44, 118, -45, 41, 78, 1, -107, -23, -70, -101, 86, -96, -46, -39, -29, 42, 103, -76, 87, -119, -10, -7, -52, 45, -87, -47, 126, 86, 26, 73, -26, 108, 49, -10, 19, -81, -9, -106, -99, 126, -78, -35, -71 };
 
-    if (r <= 244)
-        return;
-    else if (r <= 248) {
-        // Busyloop for 0 - 1 ms (on a 2 ghz), probably resume in current time slice
-        int64_t t = random.draw_int_mod(ms);
-        for (volatile int64_t i = 0; i < t; i++) {
-        }
-    }
-    else if (r <= 250) {
-        // Busyloop for 0 - 20 ms (on a 2 ghz), maybe resume in different time slice
-        int64_t t = ms * random.draw_int_mod(20);
-        for (volatile int64_t i = 0; i < t; i++) {
-        }
-    }
-    else if (r <= 252) {
-        // Release current time slice but get next available
-        sched_yield();
-    }
-    else if (r <= 254) {
-        // Release current time slice and get time slice according to normal scheduling
-#ifdef _MSC_VER
-        Sleep(0);
-#else
-        usleep(0);
-#endif
-    }
-    else {
-        // Release time slices for at least 200 ms
-#ifdef _MSC_VER
-        Sleep(200);
-#else
-        usleep(200);
-#endif
-    }
-}
-
-void do_io_on_group(std::string path, size_t id, size_t num_rows) {
-    const size_t num_iterations = 50000; // this makes it run for a loooong time
+void do_write_work(std::string path, size_t id, size_t num_rows) {
+    const size_t num_iterations = 5000000; // this makes it run for a loooong time
     const size_t payload_length_small = 10;
-    const size_t payload_length_large = 10000; // > 4096 == page_size
+    const size_t payload_length_large = 5000; // > 4096 == page_size
     Random random(random_int<unsigned long>()); // Seed from slow global generator
-    const char* key = crypt_key(true);
+    const char* key = test_key;
     for (size_t rep = 0; rep < num_iterations; ++rep) {
         std::unique_ptr<Replication> hist(make_in_realm_history(path));
         SharedGroup sg(*hist, SharedGroupOptions(key));
 
-        const size_t payload_length = rep % 10 == 0 ? payload_length_large : payload_length_small;
-        const char payload_char = 'a' + static_cast<char>((id + rep) % 26);
-        std::string std_payload(payload_length, payload_char);
-        StringData payload(std_payload);
-        if (rep % 3 == 0)
-            payload = StringData(); // null
+        ReadTransaction rt(sg);
+        LangBindHelper::promote_to_write(sg);
+        Group& group = const_cast<Group&>(rt.get_group());
+        TableRef t = group.get_table(0);
+
         for (size_t i = 0; i < num_rows; ++i) {
-            ReadTransaction rt(sg);
-            {
-                LangBindHelper::promote_to_write(sg);
+            const size_t payload_length = i % 10 == 0 ? payload_length_large : payload_length_small;
+            const char payload_char = 'a' + static_cast<char>((id + rep + i) % 26);
+            std::string std_payload(payload_length, payload_char);
+            StringData payload(std_payload);
 
-                Group& group = const_cast<Group&>(rt.get_group());
-                TableRef t = group.get_table(0);
-                t->set_string(id, i, payload);
+            t->set_int(0, i, payload.size());
+            t->set_string(1, i, StringData(std_payload.c_str(), 1));
+            t->set_string(2, i, payload);
+        }
+        LangBindHelper::commit_and_continue_as_read(sg);
+    }
+}
 
-                LangBindHelper::commit_and_continue_as_read(sg);
+void do_read_verify(std::string path) {
+    Random random(random_int<unsigned long>()); // Seed from slow global generator
+    const char* key = test_key;
+    while (true) {
+        std::unique_ptr<Replication> hist(make_in_realm_history(path));
+        SharedGroup sg(*hist, SharedGroupOptions(key));
+        ReadTransaction rt(sg);
+        if (rt.get_version() <= 2) continue; // let the writers make some initial data
+        Group& group = const_cast<Group&>(rt.get_group());
+        ConstTableRef t = group.get_table(0);
+        size_t num_rows = t->size();
+        for (size_t r = 0; r < num_rows; ++r) {
+            int64_t num_chars = t->get_int(0, r);
+            StringData c = t->get_string(1, r);
+            if (c == "stop reading") {
+                return;
+            } else {
+                REALM_ASSERT_EX(c.size() == 1, c.size());
             }
-            {
-                Group& group = const_cast<Group&>(rt.get_group());
-                ConstTableRef t = group.get_table(0);
-                StringData s = t->get_string(id, i);
-                if (rep % 3 == 0) {
-                    REALM_ASSERT_EX(s.is_null(), i, rep);
-                } else {
-                    const char* str_data = s.data();
-                    REALM_ASSERT_EX(s.size() == payload_length, s.size(), payload_length);
-                    for (size_t n = 0; n < payload_length; ++n) {
-                        REALM_ASSERT_EX(str_data[n] == payload_char, i, rep, n, str_data[n], payload_char);
-                    }
-                }
-                REALM_ASSERT_EX(s == payload, i, rep, s.size(), payload.size());
+            REALM_ASSERT(t->get_name() == StringData("class_Table_Emulation_Name"));
+            REALM_ASSERT(t->get_column_name(0) == StringData("count"));
+            REALM_ASSERT(t->get_column_name(1) == StringData("char"));
+            REALM_ASSERT(t->get_column_name(2) == StringData("payload"));
+            std::string std_validator(num_chars, c[0]);
+            StringData validator(std_validator);
+            StringData s = t->get_string(2, r);
+            REALM_ASSERT_EX(s.size() == validator.size(), r, s.size(), validator.size());
+            for (size_t i = 0; i < s.size(); ++i) {
+                REALM_ASSERT_EX(s[i] == validator[i], r, i, s[i], validator[i]);
             }
+            REALM_ASSERT_EX(s == validator, r, s.size(), validator.size());
+            std::cout << "verified row: " << r << std::endl;
         }
     }
 }
@@ -13153,34 +13133,49 @@ void do_io_on_group(std::string path, size_t id, size_t num_rows) {
 ONLY(Thread_AsynchronousIODataConsistency)
 {
     SHARED_GROUP_TEST_PATH(path);
-    const int num_threads = 8;
+    const int num_writer_threads = 2;
+    const int num_reader_threads = 2;
     const int num_rows = 200; //2 + REALM_MAX_BPNODE_SIZE;
-    const char* key = crypt_key(true);
-    std::cout << "using encryption key: " << key << std::endl;
+    const char* key = test_key;
+    std::string print_key(key, 64);
+    std::cout << "using encryption key: " << print_key << std::endl;
     //ShortCircuitHistory hist(path);
     std::unique_ptr<Replication> hist(make_in_realm_history(path));
     SharedGroup sg(*hist, SharedGroupOptions(key));
-
     {
         WriteTransaction wt(sg);
         Group& group = wt.get_group();
-        TableRef t = group.add_table("table");
+        TableRef t = group.add_table("class_Table_Emulation_Name");
         // add a column for each thread to write to
-        for (int i = 0; i < num_threads; ++i) {
-            std::stringstream ss;
-            ss << "string_col" << i;
-            t->add_column(type_String, ss.str().c_str(), true);
-        }
+        t->add_column(type_Int, "count", true);
+        t->add_column(type_String, "char", true);
+        t->add_column(type_String, "payload", true);
         t->add_empty_row(num_rows);
         wt.commit();
     }
 
-    Thread io_threads[num_threads];
-    for (int i = 0; i < num_threads; ++i) {
-        io_threads[i].start(std::bind(do_io_on_group, std::string(path), i, num_rows));
+    Thread writer_threads[num_writer_threads];
+    for (int i = 0; i < num_writer_threads; ++i) {
+        writer_threads[i].start(std::bind(do_write_work, std::string(path), i, num_rows));
     }
-    for (int i = 0; i < num_threads; ++i) {
-        io_threads[i].join();
+    Thread reader_threads[num_reader_threads];
+    for (int i = 0; i < num_reader_threads; ++i) {
+        reader_threads[i].start(std::bind(do_read_verify, std::string(path)));
+    }
+    for (int i = 0; i < num_writer_threads; ++i) {
+        writer_threads[i].join();
+    }
+
+    {
+        WriteTransaction wt(sg);
+        Group &group = wt.get_group();
+        TableRef t = group.get_table("table");
+        t->set_string(1, 0, "stop reading");
+        wt.commit();
+    }
+
+    for (int i = 0; i < num_reader_threads; ++i) {
+        reader_threads[i].join();
     }
 }
 
