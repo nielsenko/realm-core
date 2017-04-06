@@ -106,7 +106,7 @@ mapping_and_addr* find_mapping_for_addr(void* addr, size_t size)
             return &m;
     }
 
-    return 0;
+    return nullptr;
 }
 
 EncryptedFileMapping* add_mapping(void* addr, size_t size, int fd, size_t file_offset, File::AccessMode access,

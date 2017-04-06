@@ -24,10 +24,10 @@
 #include <cstdlib>
 #include <algorithm>
 
-#ifdef REALM_DEBUG
+//#ifdef REALM_DEBUG
 #include <cstdio>
 #include <iostream>
-#endif
+//#endif
 
 #include <cstring>
 #include <pthread.h>
@@ -343,43 +343,49 @@ EncryptedFileMapping::~EncryptedFileMapping()
     m_file.mappings.erase(remove(m_file.mappings.begin(), m_file.mappings.end(), this));
 }
 
-char* EncryptedFileMapping::page_addr(size_t i) const noexcept
+char* EncryptedFileMapping::page_addr(size_t page_in_file) const noexcept
 {
-    return reinterpret_cast<char*>((m_first_page + i) << m_page_shift);
+    REALM_ASSERT_EX(page_in_file >= m_first_page && page_in_file <= m_page_count, page_in_file, m_first_page, m_page_count);
+    int64_t local_page = page_in_file - m_first_page;
+    REALM_ASSERT_EX(local_page >= 0, local_page);
+    return (reinterpret_cast<char*>(local_page << m_page_shift) + reinterpret_cast<uintptr_t>(m_addr));
 }
 
 void EncryptedFileMapping::mark_outdated(size_t i) noexcept
 {
-    if (i >= m_page_count)
-        return;
-
-    if (m_dirty_pages[i])
+    page_state_iterator dirty_i = m_dirty_pages.find(i);
+    if (dirty_i != m_dirty_pages.end() && dirty_i->second) {
         flush();
-
-    if (m_up_to_date_pages[i]) {
-        m_up_to_date_pages[i] = false;
+        //sync();
     }
-}
 
-void EncryptedFileMapping::mark_up_to_date(size_t i) noexcept
-{
-    if (i >= m_up_to_date_pages.size() || m_up_to_date_pages[i])
-        return;
-
-    m_up_to_date_pages[i] = true;
+    page_state_iterator up_to_date_i = m_up_to_date_pages.find(i);
+    if (up_to_date_i != m_up_to_date_pages.end()) {
+        up_to_date_i->second = false;
+    }
 }
 
 bool EncryptedFileMapping::copy_up_to_date_page(size_t page) noexcept
 {
     // Precondition: this method must never be called for a page which
     // is already up to date.
-    REALM_ASSERT(!m_up_to_date_pages[page]);
+    page_state_iterator up_to_date_page = m_up_to_date_pages.find(page);
+    if (up_to_date_page == m_up_to_date_pages.end()) {
+        m_up_to_date_pages[page] = false;
+    } else {
+        REALM_ASSERT(!up_to_date_page->second);
+    }
+
     for (size_t i = 0; i < m_file.mappings.size(); ++i) {
         EncryptedFileMapping* m = m_file.mappings[i];
-        if (m == this || page >= m->m_page_count)
+        if (m == this)
             continue;
-
-        if (m->m_up_to_date_pages[page]) {
+        page_state_iterator up_to_date_in_m = m->m_up_to_date_pages.find(page);
+        if (up_to_date_in_m == m->m_up_to_date_pages.end())
+            continue;
+//m_up_to_date_pages might only be true for a certain arrays (versions)!
+        //if (m->m_up_to_date_pages[page] && m->m_dirty_pages[page]) {
+        if (up_to_date_in_m->second) {
             memcpy(page_addr(page), m->page_addr(page), 1 << m_page_shift);
             return true;
         }
@@ -409,13 +415,15 @@ void EncryptedFileMapping::write_page(size_t page) noexcept
             //    memcpy(m->page_addr(page), page_addr(page), m_page_size);
         }
     }
-
+    REALM_ASSERT(m_dirty_pages.find(page) != m_dirty_pages.end());
     m_dirty_pages[page] = true;
 }
 
 void EncryptedFileMapping::validate_page(size_t page) noexcept
 {
-#ifdef REALM_DEBUG
+//#ifdef REALM_DEBUG
+    REALM_ASSERT(page >= m_first_page && page <= m_page_count);
+    REALM_ASSERT(m_up_to_date_pages.find(page) != m_up_to_date_pages.end());
     if (!m_up_to_date_pages[page])
         return;
 
@@ -435,22 +443,22 @@ void EncryptedFileMapping::validate_page(size_t page) noexcept
                   << m_validate_buffer.get() << " " << page_addr(page) << std::endl;
         REALM_TERMINATE("");
     }
-#else
-    static_cast<void>(page);
-#endif
+//#else
+//    static_cast<void>(page);
+//#endif
 }
 
 void EncryptedFileMapping::validate() noexcept
 {
-#ifdef REALM_DEBUG
-    for (size_t i = 0; i < m_page_count; ++i)
+//#ifdef REALM_DEBUG
+    for (size_t i = m_first_page; i <= m_page_count; ++i)
         validate_page(i);
-#endif
+//#endif
 }
 
 void EncryptedFileMapping::flush() noexcept
 {
-    for (size_t i = 0; i < m_page_count; ++i) {
+    for (size_t i = m_first_page; i <= m_page_count; ++i) {
         if (!m_dirty_pages[i]) {
             validate_page(i);
             continue;
@@ -459,7 +467,6 @@ void EncryptedFileMapping::flush() noexcept
         m_file.cryptor.write(m_file.fd, i << m_page_shift, page_addr(i), 1 << m_page_shift);
         m_dirty_pages[i] = false;
     }
-
     validate();
 }
 
@@ -482,16 +489,15 @@ void EncryptedFileMapping::write_barrier(const void* addr, size_t size) noexcept
 {
     REALM_ASSERT(m_access == File::access_ReadWrite);
 
-    size_t first_accessed_page = reinterpret_cast<uintptr_t>(addr) >> m_page_shift;
-    size_t last_accessed_page = (reinterpret_cast<uintptr_t>(addr) + size - 1) >> m_page_shift;
+    REALM_ASSERT_EX(addr >= m_addr, addr, m_addr);
+    size_t first_accessed_page = ((reinterpret_cast<uintptr_t>(addr) - reinterpret_cast<uintptr_t>(m_addr)) >> m_page_shift) + m_first_page;
+    size_t last_accessed_page = (((reinterpret_cast<uintptr_t>(addr) + size - 1) - reinterpret_cast<uintptr_t>(m_addr)) >> m_page_shift) + m_first_page;
 
-    size_t first_idx = first_accessed_page - m_first_page;
-    size_t last_idx = last_accessed_page - m_first_page;
-
-    for (size_t idx = first_idx; idx <= last_idx; ++idx) {
+    REALM_ASSERT_EX(first_accessed_page >= m_first_page && last_accessed_page <= m_page_count, first_accessed_page, last_accessed_page, m_first_page, m_page_count);
+    for (size_t idx = first_accessed_page; idx <= last_accessed_page; ++idx) {
         // Pages written must earlier on have been decrypted
         // by a call to read_barrier().
-        REALM_ASSERT(m_up_to_date_pages[idx]);
+        REALM_ASSERT(m_up_to_date_pages.find(idx) != m_up_to_date_pages.end() && m_up_to_date_pages[idx]);
         write_page(idx);
     }
 }
@@ -504,18 +510,25 @@ void EncryptedFileMapping::set(void* new_addr, size_t new_size, size_t new_file_
 
     m_file.cryptor.set_file_size(new_size + new_file_offset);
 
-    flush();
+    if (!m_dirty_pages.empty()) {
+        flush();
+    }
+    //sync();
     m_addr = new_addr;
     m_file_offset = new_file_offset;
 
-    m_first_page = (reinterpret_cast<uintptr_t>(m_addr) - m_file_offset) >> m_page_shift;
+    //uintptr_t cast_addr = reinterpret_cast<uintptr_t>(m_addr);
+    //REALM_ASSERT_EX(cast_addr >= m_file_offset, cast_addr, m_file_offset);
+    m_first_page = m_file_offset >> m_page_shift;
     m_page_count = (new_size + m_file_offset) >> m_page_shift;
 
     m_up_to_date_pages.clear();
     m_dirty_pages.clear();
 
-    m_up_to_date_pages.resize(m_page_count, false);
-    m_dirty_pages.resize(m_page_count, false);
+    for (size_t page = m_first_page; page <= m_page_count; ++page) {
+        m_up_to_date_pages[page] = false;
+        m_dirty_pages[page] = false;
+    }
 }
 
 File::SizeType encrypted_size_to_data_size(File::SizeType size) noexcept

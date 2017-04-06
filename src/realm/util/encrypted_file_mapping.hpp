@@ -27,7 +27,7 @@
 
 typedef size_t (*Header_to_size)(const char* addr);
 
-#include <vector>
+#include <map>
 
 namespace realm {
 namespace util {
@@ -76,19 +76,19 @@ private:
     uintptr_t m_first_page;
     size_t m_page_count = 0;
 
-    std::vector<char> m_up_to_date_pages;
-    std::vector<bool> m_dirty_pages;
+    using page_state_iterator = std::map<size_t, bool>::iterator;
+    std::map<size_t, bool> m_up_to_date_pages;
+    std::map<size_t, bool> m_dirty_pages;
 
     File::AccessMode m_access;
 
-#ifdef REALM_DEBUG
+//#ifdef REALM_DEBUG
     std::unique_ptr<char[]> m_validate_buffer;
-#endif
+//#endif
 
     char* page_addr(size_t i) const noexcept;
 
     void mark_outdated(size_t i) noexcept;
-    void mark_up_to_date(size_t i) noexcept;
     void mark_unwritable(size_t i) noexcept;
 
     bool copy_up_to_date_page(size_t i) noexcept;
@@ -103,18 +103,20 @@ private:
 inline void EncryptedFileMapping::read_barrier(const void* addr, size_t size, UniqueLock& lock,
                                                Header_to_size header_to_size)
 {
-    size_t first_accessed_page = reinterpret_cast<uintptr_t>(addr) >> m_page_shift;
-    size_t first_idx = first_accessed_page - m_first_page;
+    REALM_ASSERT_EX(addr >= m_addr, addr, m_addr);
+    size_t first_accessed_page = ((reinterpret_cast<uintptr_t>(addr) - reinterpret_cast<uintptr_t>(m_addr)) >> m_page_shift) + m_first_page;
 
     // make sure the first page is available
     // Checking before taking the lock is important to performance.
-    if (!m_up_to_date_pages[first_idx]) {
+    page_state_iterator first_page_up_to_date = m_up_to_date_pages.find(first_accessed_page);
+    REALM_ASSERT_EX(first_page_up_to_date != m_up_to_date_pages.end(), first_accessed_page, m_first_page, m_page_count);
+    if (!first_page_up_to_date->second) {
         if (!lock.holds_lock())
             lock.lock();
         // after taking the lock, we must repeat the check so that we never
         // call refresh_page() on a page which is already up to date.
-        if (!m_up_to_date_pages[first_idx])
-            refresh_page(first_idx);
+        if (!first_page_up_to_date->second)
+            refresh_page(first_accessed_page);
     }
 
     if (header_to_size) {
@@ -123,10 +125,10 @@ inline void EncryptedFileMapping::read_barrier(const void* addr, size_t size, Un
         // included in the first page which was handled above.
         size = header_to_size(static_cast<const char*>(addr));
     }
-    size_t last_accessed_page = (reinterpret_cast<uintptr_t>(addr) + size - 1) >> m_page_shift;
-    size_t last_idx = last_accessed_page - m_first_page;
+    size_t last_accessed_page = ((reinterpret_cast<uintptr_t>(addr) + size - 1 - reinterpret_cast<uintptr_t>(m_addr)) >> m_page_shift) + m_first_page; // dubious off by one?
 
-    for (size_t idx = first_idx + 1; idx <= last_idx; ++idx) {
+    for (size_t idx = first_accessed_page + 1; idx <= last_accessed_page; ++idx) {
+        REALM_ASSERT_EX(idx >= m_first_page && idx <= m_page_count, idx, m_first_page, m_page_count);
         if (!m_up_to_date_pages[idx]) {
             if (!lock.holds_lock())
                 lock.lock();
