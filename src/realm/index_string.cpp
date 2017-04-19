@@ -180,7 +180,6 @@ size_t IndexArray::index_string(StringData value, InternalFindResult& result_ref
     typedef StringIndex::key_type key_type;
     size_t stringoffset = 0;
 
-    // Create 4 byte index key
     key_type key = StringIndex::create_key(value, stringoffset);
 
     for (;;) {
@@ -245,9 +244,7 @@ size_t IndexArray::index_string(StringData value, InternalFindResult& result_ref
         is_inner_node = get_is_inner_bptree_node_from_header(header);
 
         // Go to next key part of the string. If the offset exceeds the string length, the key will be 0
-        stringoffset += 4;
-
-        // Update 4 byte index key
+        stringoffset += 1; // TODO: Should go to next unicode char
         key = StringIndex::create_key(value, stringoffset);
     }
 }
@@ -319,38 +316,6 @@ void IndexArray::from_list_all(StringData value, IntegerColumn& result, const In
 }
 
 
-namespace {
-
-// Helper functions for index_string<index_FindAll_ins> for generating permutations of index keys
-
-// replicates the 4 least significant bits each times 8
-// eg: abcd -> aaaaaaaabbbbbbbbccccccccdddddddd
-int32_t replicate_4_lsb_x8(int32_t i) {
-    REALM_ASSERT_DEBUG(0 <= i && i <= 15);
-    i *= 0x204081;
-    i &= 0x1010101;
-    i *= 0xff;
-    return i;
-}
-
-int32_t select_from_mask(int32_t a, int32_t b, int32_t mask) {
-    return a ^ ((a ^ b) & mask);
-}
-
-// Given upper and lower keys: "ABCD" and "abcd", the 4 LSBs in the permutation argument determine the
-// final key:
-// Permutation 0  = "ABCD"
-// Permutation 1  = "ABCd"
-// Permutation 8  = "aBCD"
-// Permutation 15 = "abcd"
-using key_type = StringIndex::key_type;
-key_type generate_key(key_type upper, key_type lower, int permutation) {
-    return select_from_mask(upper, lower, replicate_4_lsb_x8(permutation));
-}
-
-}
-
-
 void IndexArray::index_string_all_ins(StringData value, IntegerColumn& result, ColumnBase* column) const
 {
     using key_type = StringIndex::key_type;
@@ -372,16 +337,11 @@ void IndexArray::index_string_all_ins(StringData value, IntegerColumn& result, C
         WorkItem item = work_list.back();
         work_list.pop_back();
         if (item.permutation == -1) {
-            // Generate work items for each unique permutation for this specific key
-            // E.g. keys for string segments with 4 chars will have 16 permutations.
-            // Keys for string segments with just a single character will only have
-            // 2 permutations, that must be selected from the upper byte.
-            // For a key tail of 2 bytes, the following 2^2 permutation values will be generated:
-            // 0b0000, 0b0100, 0b1000, 0b1100
-            const size_t tail_size = std::min(value.size() - item.string_offset, sizeof(key_type));
-            const int num_permutations = 1 << tail_size;
-            for (int i = 0; i < num_permutations; ++i) {
-                item.permutation = i << (4 - tail_size);
+            // TODO: Proper casing and unicode support
+            item.permutation = 0;
+            work_list.push_back(item);
+            if (item.string_offset != value.size()) {
+                item.permutation = 1;
                 work_list.push_back(item);
             }
             continue;
@@ -396,7 +356,7 @@ void IndexArray::index_string_all_ins(StringData value, IntegerColumn& result, C
         key_type upper_key = StringIndex::create_key(upper_value, string_offset);
         key_type lower_key = StringIndex::create_key(lower_value, string_offset);
         // this is almost definitely incorrect due to unicode characters crossing the 4 byte key size
-        key_type key = generate_key(upper_key, lower_key, permutation);
+        key_type key = permutation ? upper_key : lower_key;
 
         // Get subnode table
         ref_type offsets_ref = to_ref(get_direct(data, width, 0));
@@ -452,7 +412,7 @@ void IndexArray::index_string_all_ins(StringData value, IntegerColumn& result, C
         }
 
         // Recurse into sub-index;
-        const size_t sub_string_offset = string_offset + 4;
+        const size_t sub_string_offset = string_offset + 1;
         work_list.push_back({sub_header, sub_string_offset, -1});
     }
 }
@@ -532,7 +492,7 @@ void IndexArray::index_string_all(StringData value, IntegerColumn& result, Colum
         is_inner_node = get_is_inner_bptree_node_from_header(header);
 
         // Go to next key part of the string. If the offset exceeds the string length, the key will be 0
-        stringoffset += 4;
+        stringoffset += 1;
 
         // Update 4 byte index key
         key = StringIndex::create_key(value, stringoffset);
@@ -1721,16 +1681,8 @@ void StringIndex::keys_to_dot(std::ostream& out, const Array& array, StringData 
     // Values
     size_t count = array.size();
     for (size_t i = 0; i < count; ++i) {
-        uint64_t v = array.get(i); // Never right shift signed values
-
-        char str[5] = "\0\0\0\0";
-        str[3] = char(v & 0xFF);
-        str[2] = char((v >> 8) & 0xFF);
-        str[1] = char((v >> 16) & 0xFF);
-        str[0] = char((v >> 24) & 0xFF);
-        const char* s = str;
-
-        out << "<TD>" << s << "</TD>" << std::endl;
+        int64_t key = array.get(i);
+        out << "<TD>" << static_cast<char>(key) << "</TD>" << std::endl; // TODO: Proper unicode support
     }
 
     out << "</TR></TABLE>>];" << std::endl;

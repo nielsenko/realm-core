@@ -173,9 +173,8 @@ public:
     // 4 times this limit (200 bytes shared). Lists are stored in sorted order,
     // so strings sharing a common prefix of more than this limit will use a
     // binary search of approximate complexity log2(n) from `std::lower_bound`.
-    static const size_t s_max_offset = 200; // max depth * s_index_key_length
-    static const size_t s_index_key_length = 4;
-    static key_type create_key(StringData) noexcept;
+    static const size_t s_max_offset = 50; // max depth * s_index_key_length
+    static const size_t s_index_key_length = 1;
     static key_type create_key(StringData, size_t) noexcept;
 
 private:
@@ -368,41 +367,6 @@ inline StringIndex::StringIndex(inner_node_tag, Allocator& alloc)
 {
 }
 
-// Byte order of the key is *reversed*, so that for the integer index, the least significant
-// byte comes first, so that it fits little-endian machines. That way we can perform fast
-// range-lookups and iterate in order, etc, as future features. This, however, makes the same
-// features slower for string indexes. Todo, we should reverse the order conditionally, depending
-// on the column type.
-inline StringIndex::key_type StringIndex::create_key(StringData str) noexcept
-{
-    key_type key = 0;
-
-    if (str.size() >= 4)
-        goto four;
-    if (str.size() < 2) {
-        if (str.size() == 0)
-            goto none;
-        goto one;
-    }
-    if (str.size() == 2)
-        goto two;
-    goto three;
-
-// Create 4 byte index key
-// (encoded like this to allow literal comparisons
-// independently of endianness)
-four:
-    key |= (key_type(static_cast<unsigned char>(str[3])) << 0);
-three:
-    key |= (key_type(static_cast<unsigned char>(str[2])) << 8);
-two:
-    key |= (key_type(static_cast<unsigned char>(str[1])) << 16);
-one:
-    key |= (key_type(static_cast<unsigned char>(str[0])) << 24);
-none:
-    return key;
-}
-
 // Index works as follows: All non-NULL values are stored as if they had appended an 'X' character at the end. So
 // "foo" is stored as if it was "fooX", and "" (empty string) is stored as "X". And NULLs are stored as empty strings.
 inline StringIndex::key_type StringIndex::create_key(StringData str, size_t offset) noexcept
@@ -410,20 +374,14 @@ inline StringIndex::key_type StringIndex::create_key(StringData str, size_t offs
     if (str.is_null())
         return 0;
 
-    if (offset > str.size())
-        return 0;
+    if (offset < str.size())
+        return str[offset]; // TODO: Unicode
 
-    // for very short strings
-    size_t tail = str.size() - offset;
-    if (tail <= sizeof(key_type) - 1) {
-        char buf[sizeof(key_type)];
-        memset(buf, 0, sizeof(key_type));
-        buf[tail] = 'X';
-        memcpy(buf, str.data() + offset, tail);
-        return create_key(StringData(buf, tail + 1));
-    }
-    // else fallback
-    return create_key(str.substr(offset));
+    if (offset == str.size())
+        return 'X';
+
+    // if (offset > str.size())
+    return 0;
 }
 
 template <class T>
