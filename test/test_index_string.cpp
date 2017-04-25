@@ -2001,7 +2001,9 @@ TEST_TYPES(StringIndex_OneLevel, non_nullable, nullable)
     col.add("a");
     col.add("b");
 
+#ifdef REALM_DEBUG
     ndx.verify_entries(col);
+#endif
 
     ref_type results_ref = IntegerColumn::create(Allocator::get_default());
     IntegerColumn results(Allocator::get_default(), results_ref);
@@ -2020,6 +2022,8 @@ TEST_TYPES(StringIndex_OneLevel, non_nullable, nullable)
 
 
 #include <fstream>
+
+#ifdef REALM_DEBUG
 
 TEST_TYPES(StringIndex_Insensitive_Temp, non_nullable, nullable)
 {
@@ -2057,6 +2061,55 @@ TEST_TYPES(StringIndex_Insensitive_Temp, non_nullable, nullable)
     // Clean up
     results.destroy();
     col.destroy();
+}
+#endif
+
+
+ONLY_TYPES(StringIndex_StreetNames, non_nullable, nullable)
+{
+    constexpr bool nullable = TEST_TYPE::value;
+    size_t used_space_before_index = 0;
+
+    SHARED_GROUP_TEST_PATH(path);
+    SharedGroup sg(path, false, SharedGroupOptions(crypt_key()));
+    {
+        WriteTransaction wt(sg);
+        TableRef t = wt.add_table("table");
+        t->add_column(type_String, "string", nullable);
+
+        std::string street_names_file_name = get_test_resource_path();
+        street_names_file_name += "street-names.txt"; // UTF-8
+        std::ifstream test_file(street_names_file_name.c_str(), std::ios::in);
+
+        std::string str;
+        while (std::getline(test_file, str)) {
+            size_t row_ndx = t->add_empty_row();
+            t->set_string(0, row_ndx, str);
+        }
+        wt.commit();
+
+        size_t unused;
+        sg.get_stats(unused, used_space_before_index);
+    }
+
+    {
+        WriteTransaction wt(sg);
+        TableRef t = wt.get_table("table");
+        t->add_search_index(0);
+        wt.commit();
+
+        size_t unused;
+        size_t used_space_after_index = 0;
+        sg.get_stats(unused, used_space_after_index);
+        std::cout << "used space before index: " << used_space_before_index << '\n';
+        std::cout << "used space after index: " << used_space_after_index << '\n';
+        size_t used_space_by_index = used_space_after_index - used_space_before_index;
+        std::cout << "used space by index: " << used_space_by_index << '\n';
+        std::cout << "percentage: " << (used_space_by_index * 100) / used_space_after_index << "%\n";
+    }
+
+    //    const StringIndex& ndx = *col.create_search_index();
+    //    ndx.verify_entries(col);
 }
 
 
