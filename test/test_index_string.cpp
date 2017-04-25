@@ -1969,4 +1969,146 @@ TEST_TYPES(StringIndex_Insensitive_VeryLongStrings, non_nullable, nullable)
 }
 
 
+TEST_TYPES(StringIndex_OneLevel, non_nullable, nullable)
+{
+    constexpr bool nullable = TEST_TYPE::value;
+
+    ref_type ref = StringColumn::create(Allocator::get_default());
+    StringColumn col(Allocator::get_default(), ref, nullable);
+    const StringIndex& ndx = *col.create_search_index();
+
+    //    col.add("HEJSA"); // 0
+    //    col.add("1");
+    //    col.add("HEJSA");
+    //    col.add("3");
+    //    col.add("HEJSA");
+    //    col.add("5");
+    //    col.add("HEJSA");
+    //    col.add("7");
+    //    col.add("HEJSA");
+    //    col.add("9");
+    //    col.add("HEJSA");
+    //    col.add("11");
+    //    col.add("HEJSA");
+    //    col.add("13");
+    //    col.add("HEJSA");
+    //    col.add("15");
+    //    col.add("HEJSA"); // 16
+
+    col.add("aaaaaa");
+    col.add("a");
+    col.add("b");
+
+#ifdef REALM_DEBUG
+    ndx.verify_entries(col);
+#endif
+
+    ref_type results_ref = IntegerColumn::create(Allocator::get_default());
+    IntegerColumn results(Allocator::get_default(), results_ref);
+
+    ndx.find_all(results, "a", true);
+    CHECK_EQUAL(results.size(), 1);
+    results.clear();
+
+    ndx.find_all(results, "A", true);
+    CHECK_EQUAL(results.size(), 1);
+    results.clear();
+
+    results.destroy();
+    col.destroy();
+}
+
+
+#include <fstream>
+
+#ifdef REALM_DEBUG
+
+TEST_TYPES(StringIndex_Insensitive_Temp, non_nullable, nullable)
+{
+    constexpr bool nullable = TEST_TYPE::value;
+
+    ref_type ref = StringColumn::create(Allocator::get_default());
+    StringColumn col(Allocator::get_default(), ref, nullable);
+
+    constexpr int num_strings = 256;
+
+    for (int i = 1; i < num_strings; ++i) {
+        col.add(std::string(i, 'a').c_str());
+    }
+
+    const StringIndex& ndx = *col.create_search_index();
+
+    ndx.verify_entries(col);
+
+    std::fstream out("structure.dot", std::fstream::out);
+    ndx.to_dot(out, "StringIndex");
+
+    ref_type results_ref = IntegerColumn::create(Allocator::get_default());
+    IntegerColumn results(Allocator::get_default(), results_ref);
+
+    // Test generated 'a'-strings
+    for (int i = 1; i < num_strings; ++i) {
+        const std::string str = std::string(i, 'A');
+        ndx.find_all(results, str.c_str(), false);
+        CHECK_EQUAL(0, results.size());
+        ndx.find_all(results, str.c_str(), true);
+        CHECK_EQUAL(1, results.size());
+        results.clear();
+    }
+
+    // Clean up
+    results.destroy();
+    col.destroy();
+}
+#endif
+
+
+ONLY_TYPES(StringIndex_StreetNames, non_nullable, nullable)
+{
+    constexpr bool nullable = TEST_TYPE::value;
+    size_t used_space_before_index = 0;
+
+    SHARED_GROUP_TEST_PATH(path);
+    SharedGroup sg(path, false, SharedGroupOptions(crypt_key()));
+    {
+        WriteTransaction wt(sg);
+        TableRef t = wt.add_table("table");
+        t->add_column(type_String, "string", nullable);
+
+        std::string street_names_file_name = get_test_resource_path();
+        street_names_file_name += "street-names.txt"; // UTF-8
+        std::ifstream test_file(street_names_file_name.c_str(), std::ios::in);
+
+        std::string str;
+        while (std::getline(test_file, str)) {
+            size_t row_ndx = t->add_empty_row();
+            t->set_string(0, row_ndx, str);
+        }
+        wt.commit();
+
+        size_t unused;
+        sg.get_stats(unused, used_space_before_index);
+    }
+
+    {
+        WriteTransaction wt(sg);
+        TableRef t = wt.get_table("table");
+        t->add_search_index(0);
+        wt.commit();
+
+        size_t unused;
+        size_t used_space_after_index = 0;
+        sg.get_stats(unused, used_space_after_index);
+        std::cout << "used space before index: " << used_space_before_index << '\n';
+        std::cout << "used space after index: " << used_space_after_index << '\n';
+        size_t used_space_by_index = used_space_after_index - used_space_before_index;
+        std::cout << "used space by index: " << used_space_by_index << '\n';
+        std::cout << "percentage: " << (used_space_by_index * 100) / used_space_after_index << "%\n";
+    }
+
+    //    const StringIndex& ndx = *col.create_search_index();
+    //    ndx.verify_entries(col);
+}
+
+
 #endif // TEST_INDEX_STRING
