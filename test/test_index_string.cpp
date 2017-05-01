@@ -2105,7 +2105,7 @@ ONLY_TYPES(StringIndex_StreetNames, non_nullable, nullable)
         std::cout << "used space after index: " << used_space_after_index << '\n';
         size_t used_space_by_index = used_space_after_index - used_space_before_index;
         std::cout << "used space by index: " << used_space_by_index << '\n';
-        std::cout << "percentage: " << (used_space_by_index * 100) / used_space_after_index << "%\n";
+        std::cout << "index overhead: " << (used_space_by_index * 100) / used_space_before_index << "%\n";
     }
 
     //    const StringIndex& ndx = *col.create_search_index();
