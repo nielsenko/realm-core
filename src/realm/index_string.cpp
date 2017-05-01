@@ -546,7 +546,6 @@ IndexArray* StringIndex::create_node(Allocator& alloc, bool is_leaf)
     // Add subcolumns for leaves
     Array values(alloc);
     values.create(Array::type_Normal);       // Throws
-    values.ensure_minimum_width(0x7FFFFFFF); // This ensures 31 bits plus a sign bit
     top->add(values.get_ref());              // first entry in refs points to offsets
 
     return top.release();
@@ -1138,7 +1137,6 @@ void StringIndex::clear()
     REALM_ASSERT(m_array->size() == values.size() + 1);
 
     values.clear();
-    values.ensure_minimum_width(0x7FFFFFFF); // This ensures 31 bits plus a sign bit
 
     size_t size = 1;
     m_array->truncate_and_destroy_children(size); // Don't touch `values` array
