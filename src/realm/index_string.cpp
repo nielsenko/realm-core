@@ -190,7 +190,8 @@ size_t IndexArray::index_string(StringData value, InternalFindResult& result_ref
         const char* offsets_header = m_alloc.translate(offsets_ref);
         const char* offsets_data = get_data_from_header(offsets_header);
         size_t offsets_size = get_size_from_header(offsets_header);
-        size_t pos = ::lower_bound<32>(offsets_data, offsets_size, key); // keys are always 32 bits wide
+        const size_t offsets_width = get_width_from_header(offsets_header);
+        size_t pos = ::lower_bound(offsets_data, offsets_width, offsets_size, key);
 
         // If key is outside range, we know there can be no match
         if (pos == offsets_size)
@@ -209,7 +210,7 @@ size_t IndexArray::index_string(StringData value, InternalFindResult& result_ref
             continue;
         }
 
-        key_type stored_key = key_type(get_direct<32>(offsets_data, pos));
+        key_type stored_key = key_type(get_direct(offsets_data, offsets_width, pos));
 
         if (stored_key != key)
             return local_not_found;
@@ -365,7 +366,8 @@ void IndexArray::index_string_all_ins(StringData value, IntegerColumn& result, C
         const char* const offsets_header = m_alloc.translate(offsets_ref);
         const char* const offsets_data = get_data_from_header(offsets_header);
         const size_t offsets_size = get_size_from_header(offsets_header);
-        const size_t pos = ::lower_bound<32>(offsets_data, offsets_size, key); // keys are always 32 bits wide
+        const size_t offsets_width = get_width_from_header(offsets_header);
+        const size_t pos = ::lower_bound(offsets_data, offsets_width, offsets_size, key);
 
         // If key is outside range, we know there can be no match
         if (pos == offsets_size)
@@ -382,7 +384,7 @@ void IndexArray::index_string_all_ins(StringData value, IntegerColumn& result, C
             continue;
         }
 
-        const key_type stored_key = key_type(get_direct<32>(offsets_data, pos));
+        const key_type stored_key = key_type(get_direct(offsets_data, offsets_width, pos));
 
         if (stored_key != key)
             continue;
@@ -438,7 +440,8 @@ void IndexArray::index_string_all(StringData value, IntegerColumn& result, Colum
         const char* offsets_header = m_alloc.translate(offsets_ref);
         const char* offsets_data = get_data_from_header(offsets_header);
         size_t offsets_size = get_size_from_header(offsets_header);
-        size_t pos = ::lower_bound<32>(offsets_data, offsets_size, key); // keys are always 32 bits wide
+        const size_t offsets_width = get_width_from_header(offsets_header);
+        size_t pos = ::lower_bound(offsets_data, offsets_width, offsets_size, key);
 
         // If key is outside range, we know there can be no match
         if (pos == offsets_size)
@@ -457,7 +460,7 @@ void IndexArray::index_string_all(StringData value, IntegerColumn& result, Colum
             continue;
         }
 
-        key_type stored_key = key_type(get_direct<32>(offsets_data, pos));
+        key_type stored_key = key_type(get_direct(offsets_data, offsets_width, pos));
 
         if (stored_key != key)
             return;

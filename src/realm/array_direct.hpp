@@ -324,6 +324,10 @@ inline size_t lower_bound(const char* data, size_t size, int64_t value) noexcept
     return low;
 }
 
+inline size_t lower_bound(const char* data, size_t width, size_t size, int64_t value) {
+    REALM_TEMPEX(return lower_bound, width, (data, size, value));
+}
+
 // See lower_bound()
 template <int width>
 inline size_t upper_bound(const char* data, size_t size, int64_t value) noexcept
