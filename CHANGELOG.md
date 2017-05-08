@@ -7,7 +7,7 @@
 
 ### Breaking changes
 
-* Lorem ipsum.
+* New replication instruction: instr_AddRowWithKey
 
 ### Enhancements
 
@@ -22,6 +22,10 @@
   * Make `Table::find_first<T>()` public and add support for most column types.
   * Add wrappers for `Table::set<T>()` to `Row`.
   * Add support for all column types in `Table::get<T>()`.
+* Add Table::add_row_with_key(). Adds a row and fills an integer column with
+  a value in one operation.
+  PR [#2596](https://github.com/realm/realm-core/pull/2596)
+  Issue [#2585](https://github.com/realm/realm-core/issues/2585)
 
 -----------
 
