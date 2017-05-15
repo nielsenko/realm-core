@@ -2,12 +2,37 @@
 
 ### Bugfixes
 
-* Fix for creating process-shared mutex objects in the wrong kernel object namespace on UWP.
-  PR [#2579](https://github.com/realm/realm-core/pull/2579).
+* Lorem ipsum.
 
 ### Breaking changes
 
 * New replication instruction: instr_AddRowWithKey
+
+### Enhancements
+
+* Add Table::add_row_with_key(). Adds a row and fills an integer column with
+  a value in one operation.
+  PR [#2596](https://github.com/realm/realm-core/pull/2596)
+  Issue [#2585](https://github.com/realm/realm-core/issues/2585)
+
+-----------
+
+### Internals
+
+* The RuntimeLibrary of the Windows build is changed from MultiThreadedDLL to just MultiThreaded so as to statically link
+  the Visual C++ runtime libraries, removing the onus on end-users to have the correct runtime redistributable package
+  or satellite assembly pack installed. Libraries that link against Core on Windows will have to adjust their compiler flags accordingly.
+  PR [#2611](https://github.com/realm/realm-core/pull/2611)
+  
+
+----------------------------------------------
+
+# 2.7.0 Release notes
+
+### Bugfixes
+
+* Fix for creating process-shared mutex objects in the wrong kernel object namespace on UWP.
+  PR [#2579](https://github.com/realm/realm-core/pull/2579).
 
 ### Enhancements
 
@@ -22,10 +47,6 @@
   * Make `Table::find_first<T>()` public and add support for most column types.
   * Add wrappers for `Table::set<T>()` to `Row`.
   * Add support for all column types in `Table::get<T>()`.
-* Add Table::add_row_with_key(). Adds a row and fills an integer column with
-  a value in one operation.
-  PR [#2596](https://github.com/realm/realm-core/pull/2596)
-  Issue [#2585](https://github.com/realm/realm-core/issues/2585)
 
 -----------
 
